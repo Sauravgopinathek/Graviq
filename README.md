@@ -20,4 +20,30 @@ This is a monorepo containing the following components:
    npm install
    ```
 
-3. Navigate to each directory (`client`, `server`, `widget`) to find more specific instructions on running the individual services.
+## Running Locally
+
+Start the **server** (runs on `http://localhost:3000`):
+```bash
+cd server
+npm run dev
+```
+
+Start the **client** (runs on `http://localhost:5173`):
+```bash
+cd client
+npm run dev
+```
+
+## Testing the Widget
+
+A built-in test page is available to preview the chat widget without needing an external website.
+
+1. Start the server:
+   ```bash
+   cd server
+   npm start
+   ```
+
+2. Open [http://localhost:3000/test](http://localhost:3000/test) in your browser.
+
+This loads `test-website.html` — a dummy page with the Graviq widget embedded in the bottom-right corner. You can chat with the bot and see lead qualification in action.
