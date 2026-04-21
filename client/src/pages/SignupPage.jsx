@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import GoogleSignInButton from '../components/GoogleSignInButton';
 import { useAuth } from '../context/AuthContext';
 
 export default function SignupPage() {
@@ -9,7 +10,9 @@ export default function SignupPage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signup } = useAuth();
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const { signup, googleLogin } = useAuth();
+  const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -24,6 +27,11 @@ export default function SignupPage() {
     setLoading(true);
     try {
       const res = await signup(email, password);
+      if (res?.requiresOtp) {
+        navigate('/verify-otp');
+        return;
+      }
+
       setMessage(res.message || 'Account created. Check your email to verify your account.');
       setEmail('');
       setPassword('');
@@ -35,6 +43,21 @@ export default function SignupPage() {
     }
   };
 
+  const handleGoogleSignup = async (credential) => {
+    setError('');
+    setMessage('');
+    setGoogleLoading(true);
+
+    try {
+      await googleLogin(credential);
+      navigate('/dashboard');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Google sign-in failed.');
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
   return (
     <div className="auth-container">
       <div className="auth-card card card-glass animate-in">
@@ -42,7 +65,31 @@ export default function SignupPage() {
         <p>Create your Graviq account</p>
 
         {error && <div className="auth-error">{error}</div>}
-        {message && <div className="card" style={{ marginBottom: 16, padding: 14, background: 'rgba(0, 230, 118, 0.08)', borderColor: 'rgba(0, 230, 118, 0.25)', color: 'var(--text-primary)' }}>{message}</div>}
+        {message && (
+          <div
+            className="card"
+            style={{
+              marginBottom: 16,
+              padding: 14,
+              background: 'rgba(0, 230, 118, 0.08)',
+              borderColor: 'rgba(0, 230, 118, 0.25)',
+              color: 'var(--text-primary)',
+            }}
+          >
+            {message}
+          </div>
+        )}
+
+        <GoogleSignInButton
+          label="Sign up with Google"
+          onCredential={handleGoogleSignup}
+          onError={setError}
+        />
+        {googleLoading ? <div className="auth-google-status">Creating your account with Google...</div> : null}
+
+        <div className="auth-divider">
+          <span>or use email</span>
+        </div>
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
@@ -65,7 +112,7 @@ export default function SignupPage() {
               className="form-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder="********"
               required
               minLength={6}
             />
@@ -78,7 +125,7 @@ export default function SignupPage() {
               className="form-input"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder="********"
               required
               minLength={6}
             />

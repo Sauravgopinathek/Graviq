@@ -22,7 +22,9 @@ client.interceptors.request.use((config) => {
 client.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const hadAuthHeader = Boolean(error.config?.headers?.Authorization);
+
+    if (error.response?.status === 401 && hadAuthHeader) {
       localStorage.removeItem('graviq_token');
       localStorage.removeItem('graviq_user');
       window.location.href = '/login';

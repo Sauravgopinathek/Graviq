@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import GoogleSignInButton from '../components/GoogleSignInButton';
 import { useAuth } from '../context/AuthContext';
 
 export default function LoginPage() {
@@ -7,20 +8,41 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const { login, googleLogin } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+
     try {
-      await login(email, password);
+      const result = await login(email, password);
+      if (result?.requiresOtp) {
+        navigate('/verify-otp');
+        return;
+      }
+
       navigate('/dashboard');
     } catch (err) {
       setError(err.response?.data?.error || 'Login failed. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = async (credential) => {
+    setError('');
+    setGoogleLoading(true);
+
+    try {
+      await googleLogin(credential);
+      navigate('/dashboard');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Google sign-in failed.');
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -31,6 +53,17 @@ export default function LoginPage() {
         <p>Sign in to your Graviq dashboard</p>
 
         {error && <div className="auth-error">{error}</div>}
+
+        <GoogleSignInButton
+          label="Continue with Google"
+          onCredential={handleGoogleLogin}
+          onError={setError}
+        />
+        {googleLoading ? <div className="auth-google-status">Signing in with Google...</div> : null}
+
+        <div className="auth-divider">
+          <span>or use email</span>
+        </div>
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
@@ -56,7 +89,7 @@ export default function LoginPage() {
               className="form-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder="********"
               required
               minLength={6}
             />
