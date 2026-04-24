@@ -2,7 +2,7 @@ const express = require('express');
 const { body, param, validationResult } = require('express-validator');
 const db = require('../db');
 const { generateReply } = require('../services/ai');
-const { extractLeadInfo, validateName, validatePhone } = require('../services/leadValidator');
+const { getOrCreateSession, updateSession, STAGES } = require('../services/sessionManager');
 
 const router = express.Router();
 
@@ -102,42 +102,36 @@ router.post(
       }
 
       const bot = botResult.rows[0];
-      const messages = conversation.messages || [];
+
+      // Get or create session
+      const session = await getOrCreateSession(conversation.id);
 
       // Add user message
+      const messages = conversation.messages || [];
       messages.push({ role: 'user', content });
 
-      // Generate AI reply via NVIDIA
-      const aiReply = await generateReply(bot.config, messages);
+      // Update session based on user input
+      const updatedSession = await updateSession(session.id, content, session.stage);
+
+      // Generate AI reply with session context
+      const sessionData = { name: updatedSession.name, phone: updatedSession.phone };
+      const aiReply = await generateReply(bot.config, messages, updatedSession.stage, sessionData);
       messages.push({ role: 'assistant', content: aiReply });
 
-      // Extract lead info from conversation
-      const leadInfo = extractLeadInfo(messages);
+      // Create or update lead if session is complete
       let leadId = conversation.lead_id;
-
-      // If we captured enough info, create or update lead
-      if (leadInfo.name && leadInfo.phone && validateName(leadInfo.name) && validatePhone(leadInfo.phone)) {
+      if (updatedSession.stage === STAGES.COMPLETE && updatedSession.name && updatedSession.phone) {
         if (!leadId) {
-          // Create new lead
           const leadResult = await db.query(
-            `INSERT INTO leads (bot_id, name, phone, email, source_url, intent, confidence_score)
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-            [
-              bot.id,
-              leadInfo.name,
-              leadInfo.phone,
-              leadInfo.email,
-              req.body.sourceUrl || null,
-              'interested',
-              0.8,
-            ]
+            `INSERT INTO leads (bot_id, name, phone, source_url, intent, confidence_score)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+            [bot.id, updatedSession.name, updatedSession.phone, req.body.sourceUrl || null, 'interested', 0.8]
           );
           leadId = leadResult.rows[0].id;
         } else {
-          // Update existing lead
           await db.query(
-            'UPDATE leads SET name = $1, phone = $2, email = COALESCE($3, email) WHERE id = $4',
-            [leadInfo.name, leadInfo.phone, leadInfo.email, leadId]
+            'UPDATE leads SET name = $1, phone = $2 WHERE id = $3',
+            [updatedSession.name, updatedSession.phone, leadId]
           );
         }
       }
@@ -148,23 +142,27 @@ router.post(
         [JSON.stringify(messages), leadId, conversation.id]
       );
 
-      // Calculate progress for gamified UI
+      // Calculate progress
       const capturedFields = [];
-      if (leadInfo.name) capturedFields.push('name');
-      if (leadInfo.phone) capturedFields.push('phone');
-      if (leadInfo.email) capturedFields.push('email');
+      if (updatedSession.name) capturedFields.push('name');
+      if (updatedSession.phone) capturedFields.push('phone');
 
-      const totalRequired = 2; // name + phone
+      const totalRequired = 2;
       const progress = Math.min(capturedFields.length, totalRequired) / totalRequired;
 
       res.json({
         reply: aiReply,
+        session: {
+          stage: updatedSession.stage,
+          name: updatedSession.name,
+          phone: updatedSession.phone,
+        },
         progress: {
           percentage: Math.round(progress * 100),
           captured: capturedFields,
-          stepsLeft: totalRequired - Math.min(capturedFields.length, totalRequired),
+          stepsLeft: totalRequired - capturedFields.length,
         },
-        leadCaptured: !!(leadInfo.name && leadInfo.phone),
+        leadCaptured: updatedSession.stage === STAGES.COMPLETE,
       });
     } catch (err) {
       console.error('Message error:', err);

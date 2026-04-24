@@ -6,54 +6,58 @@ const client = new OpenAI({
 });
 
 /**
- * Build a system prompt from bot config.
+ * Build a system prompt from bot config and session stage.
  */
-function buildSystemPrompt(botConfig) {
+function buildSystemPrompt(botConfig, stage, sessionData = {}) {
   const businessName = botConfig.businessName || 'our company';
   const businessContext = botConfig.businessContext || '';
   const tone = botConfig.tone || 'friendly';
   const language = botConfig.language || 'English';
   const welcomeMessage = botConfig.welcomeMessage || 'Hello! How can I help you today?';
 
-  return `You are a ${tone} sales assistant for ${businessName}.
-Your goal is to help the visitor and naturally collect their name and phone number.
-Never ask directly for phone number at the start. Build rapport first.
+  let stageInstruction = '';
 
+  switch (stage) {
+    case 'START':
+      stageInstruction = `Start with: "${welcomeMessage}"\nThen ask about their needs or interests related to ${businessName}.`;
+      break;
+    case 'ASK_NAME':
+      stageInstruction = `Build rapport and naturally ask: "What should I call you?" or "May I know your name?"`;
+      break;
+    case 'ASK_PHONE':
+      stageInstruction = `Address them as ${sessionData.name}. Ask for their phone number to send personalized results or follow up: "Where can I reach you? A phone number works best!"`;
+      break;
+    case 'COMPLETE':
+      stageInstruction = `Thank ${sessionData.name} and confirm next steps. You have their contact info.`;
+      break;
+  }
+
+  return `You are a ${tone} sales assistant for ${businessName}.
 Business context: ${businessContext}
 
 Communication style:
-- Use short, ${tone} messages
-- Speak in ${language}
-- Keep responses under 3 sentences when possible
+- Use short, ${tone} messages in ${language}
+- Keep responses under 3 sentences
 
-Conversation flow:
-1. GREETING: Start with a warm welcome. Use something like: "${welcomeMessage}"
-2. PROBLEM DISCOVERY: Ask about their needs or pain points
-3. VALUE OFFERING: Share relevant solutions based on business context
-4. GAMIFIED ENGAGEMENT: Use a mini-quiz or personalized recommendation
-5. LEAD CAPTURE: Frame contact collection as result delivery:
-   - "Want to see a personalized result?"
-   - "What should I call you?" (capture name)
-   - "Where can I send your result? A phone number works best!" (capture phone)
-6. CONFIRMATION: Thank them and confirm next steps
+Current stage: ${stage}
+${stageInstruction}
 
 Rules:
-- Never be pushy about collecting information
-- If the user resists sharing info, continue the conversation naturally and try again later
-- Always provide value before asking for contact details
-- When you detect the user has shared their name, acknowledge it naturally
-- When you detect the user has shared a phone number, confirm it and wrap up
-- Never explicitly say you are collecting leads or data`;
+- Never be pushy
+- Provide value before asking for information
+- Never explicitly mention you are collecting data`;
 }
 
 /**
- * Generate an AI reply given bot config and conversation messages.
+ * Generate an AI reply given bot config, conversation messages, and session state.
  * @param {Object} botConfig - The bot's configuration
  * @param {Array} messages - Array of {role, content} messages
+ * @param {string} stage - Current session stage
+ * @param {Object} sessionData - Session data (name, phone)
  * @returns {string} AI response text
  */
-async function generateReply(botConfig, messages) {
-  const systemPrompt = buildSystemPrompt(botConfig);
+async function generateReply(botConfig, messages, stage = 'START', sessionData = {}) {
+  const systemPrompt = buildSystemPrompt(botConfig, stage, sessionData);
 
   const fullMessages = [
     { role: 'system', content: systemPrompt },
