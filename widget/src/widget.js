@@ -10,10 +10,33 @@
   const BOT_ID = config.botId;
   const THEME = config.theme || 'dark';
   const POSITION = config.position || 'bottom-right';
-  const SERVER_URL = config.serverUrl || window.location.origin;
+
+  function getWidgetScriptSrc() {
+    if (document.currentScript && document.currentScript.src) {
+      return document.currentScript.src;
+    }
+
+    const scripts = document.getElementsByTagName('script');
+    for (let i = scripts.length - 1; i >= 0; i -= 1) {
+      const src = scripts[i].src || '';
+      if (src.includes('/widget.js')) {
+        return src;
+      }
+    }
+
+    return null;
+  }
+
+  const WIDGET_SCRIPT_SRC = getWidgetScriptSrc();
+  const SERVER_URL = WIDGET_SCRIPT_SRC ? new URL(WIDGET_SCRIPT_SRC, window.location.href).origin : null;
 
   if (!BOT_ID) {
     console.error('[Graviq] Missing botId in window.aiLeadBot config');
+    return;
+  }
+
+  if (!SERVER_URL) {
+    console.error('[Graviq] Unable to resolve backend URL from widget.js script source');
     return;
   }
 

@@ -5,6 +5,16 @@ const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
 
+function getWidgetBaseUrl(req) {
+  const configuredBaseUrl = process.env.WIDGET_BASE_URL || process.env.PUBLIC_BASE_URL;
+
+  if (configuredBaseUrl) {
+    return configuredBaseUrl.replace(/\/+$/, '');
+  }
+
+  return `${req.protocol}://${req.get('host')}`;
+}
+
 // All bot routes require authentication
 router.use(authMiddleware);
 
@@ -172,18 +182,17 @@ router.get('/:id/embed', param('id').isUUID(), async (req, res) => {
     const bot = result.rows[0];
     const theme = bot.config.theme || 'dark';
     const position = bot.config.position || 'bottom-right';
-    const serverUrl = `${req.protocol}://${req.get('host')}`;
+    const widgetBaseUrl = getWidgetBaseUrl(req);
 
     const embedCode = `<!-- Graviq Chat Widget -->
 <script>
   window.aiLeadBot = {
     botId: "${bot.id}",
     theme: "${theme}",
-    position: "${position}",
-    serverUrl: "${serverUrl}"
+    position: "${position}"
   };
 </script>
-<script src="${serverUrl}/widget.js"></script>`;
+<script src="${widgetBaseUrl}/widget.js"></script>`;
 
     res.json({ embedCode });
   } catch (err) {

@@ -31,7 +31,14 @@ router.post(
       // Domain validation
       if (sourceUrl && bot.domains && bot.domains.length > 0) {
         try {
-          const hostname = new URL(sourceUrl).hostname;
+          const parsedUrl = new URL(sourceUrl);
+
+          // Allow opening a local HTML file directly during development.
+          if (parsedUrl.protocol === 'file:') {
+            throw new Error('skip-domain-check-for-file-url');
+          }
+
+          const hostname = parsedUrl.hostname;
           const allowed = bot.domains.some(
             (d) => hostname === d || hostname.endsWith('.' + d)
           );
@@ -39,7 +46,7 @@ router.post(
             return res.status(403).json({ error: 'Domain not allowed' });
           }
         } catch (e) {
-          // Invalid URL, skip domain check
+          // Invalid URL or local file URL, skip domain check
         }
       }
 
