@@ -6,6 +6,33 @@ const { getOrCreateSession, updateSession, STAGES } = require('../services/sessi
 
 const router = express.Router();
 
+function normalizeAllowedDomain(domain) {
+  if (!domain || typeof domain !== 'string') return null;
+
+  const trimmed = domain.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed.includes('://') ? trimmed : `http://${trimmed}`);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return trimmed
+      .replace(/^https?:\/\//i, '')
+      .split('/')[0]
+      .split(':')[0]
+      .toLowerCase();
+  }
+}
+
+function isAllowedDomain(hostname, domains) {
+  const normalizedHostname = hostname.toLowerCase();
+
+  return domains
+    .map(normalizeAllowedDomain)
+    .filter(Boolean)
+    .some((domain) => normalizedHostname === domain || normalizedHostname.endsWith(`.${domain}`));
+}
+
 // POST /api/conversations — start a new conversation (public)
 router.post(
   '/',
@@ -38,10 +65,7 @@ router.post(
             throw new Error('skip-domain-check-for-file-url');
           }
 
-          const hostname = parsedUrl.hostname;
-          const allowed = bot.domains.some(
-            (d) => hostname === d || hostname.endsWith('.' + d)
-          );
+          const allowed = isAllowedDomain(parsedUrl.hostname, bot.domains);
           if (!allowed) {
             return res.status(403).json({ error: 'Domain not allowed' });
           }

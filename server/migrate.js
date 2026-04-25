@@ -45,6 +45,28 @@ async function runMigration() {
       ON auth_otp_challenges(user_id, purpose);
     `);
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
+        name VARCHAR(255),
+        phone VARCHAR(50),
+        email VARCHAR(255),
+        stage VARCHAR(20) NOT NULL DEFAULT 'START',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_sessions_conversation_id
+      ON sessions(conversation_id);
+    `);
+
+    await pool.query(`
+      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+    `);
+
     // Set existing users to true so they aren't locked out immediately.
     await pool.query(`
       UPDATE users SET is_verified = true;

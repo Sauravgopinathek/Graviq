@@ -34,10 +34,10 @@ app.get('/test', (req, res) => {
 
 // API Routes with rate limiting
 app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api', analyticsRoutes);
 app.use('/api/bots', botRoutes);
 app.use('/api', leadRoutes);
 app.use('/api/conversations', conversationRoutes);
-app.use('/api', analyticsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

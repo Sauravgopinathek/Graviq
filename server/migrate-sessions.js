@@ -10,10 +10,15 @@ async function addSessionsTable() {
         conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
         name VARCHAR(255),
         phone VARCHAR(50),
+        email VARCHAR(255),
         stage VARCHAR(20) NOT NULL DEFAULT 'START',
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
+    `);
+
+    await db.query(`
+      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS email VARCHAR(255);
     `);
 
     await db.query(`
