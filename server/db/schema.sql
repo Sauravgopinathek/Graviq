@@ -67,9 +67,18 @@ CREATE TABLE IF NOT EXISTS sessions (
   conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
   name VARCHAR(255),
   phone VARCHAR(50),
+  email VARCHAR(255),
   stage VARCHAR(20) NOT NULL DEFAULT 'START',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Bot impressions (visitor tracking)
+CREATE TABLE IF NOT EXISTS bot_impressions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  source_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Indexes
@@ -79,3 +88,4 @@ CREATE INDEX IF NOT EXISTS idx_conversations_bot_id ON conversations(bot_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_lead_id ON conversations(lead_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_conversation_id ON sessions(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_auth_otp_challenges_user_purpose ON auth_otp_challenges(user_id, purpose);
+CREATE INDEX IF NOT EXISTS idx_bot_impressions_bot_id ON bot_impressions(bot_id);

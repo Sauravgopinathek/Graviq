@@ -1,6 +1,7 @@
 /**
  * Graviq — Embeddable AI Chat Widget
  * Self-contained vanilla JS widget with zero external dependencies.
+ * Features: chat, gamification (buttons, quiz, spin wheel, rewards), progress bar
  */
 (function () {
   'use strict';
@@ -58,13 +59,92 @@
     send: '<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>',
   };
 
+  // ===== Spin Wheel Config =====
+  const WHEEL_SEGMENTS = [
+    { label: '10% Off', color: '#6C5CE7' },
+    { label: '15% Off', color: '#00D2FF' },
+    { label: 'Free Trial', color: '#00E676' },
+    { label: '20% Off', color: '#FFB74D' },
+    { label: 'Bonus Gift', color: '#FF5252' },
+    { label: '5% Off', color: '#AB47BC' },
+  ];
+
   // ===== State =====
   let conversationId = null;
   let isOpen = false;
   let isSending = false;
+  let impressionSent = false;
 
   // ===== DOM Elements =====
   let container, toggleBtn, chatWindow, messagesEl, inputEl, sendBtn, typingEl, progressEl, progressFill, progressLabel;
+
+  // ===== Gamification Marker Parser =====
+  function parseGamification(text) {
+    const parts = [];
+    const lines = text.split('\n');
+    let textBuffer = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      // [BUTTONS:Option A|Option B|Option C]
+      const buttonsMatch = trimmed.match(/^\[BUTTONS:(.+)\]$/);
+      if (buttonsMatch) {
+        if (textBuffer.length > 0) {
+          parts.push({ type: 'text', content: textBuffer.join('\n') });
+          textBuffer = [];
+        }
+        const options = buttonsMatch[1].split('|').map(s => s.trim());
+        parts.push({ type: 'buttons', options });
+        continue;
+      }
+
+      // [QUIZ:Question?|Option A|Option B|Option C]
+      const quizMatch = trimmed.match(/^\[QUIZ:(.+)\]$/);
+      if (quizMatch) {
+        if (textBuffer.length > 0) {
+          parts.push({ type: 'text', content: textBuffer.join('\n') });
+          textBuffer = [];
+        }
+        const quizParts = quizMatch[1].split('|').map(s => s.trim());
+        const question = quizParts[0];
+        const options = quizParts.slice(1);
+        parts.push({ type: 'quiz', question, options });
+        continue;
+      }
+
+      // [SPIN_WHEEL]
+      if (trimmed === '[SPIN_WHEEL]') {
+        if (textBuffer.length > 0) {
+          parts.push({ type: 'text', content: textBuffer.join('\n') });
+          textBuffer = [];
+        }
+        parts.push({ type: 'spin_wheel' });
+        continue;
+      }
+
+      // [REWARD:Title|Subtitle]
+      const rewardMatch = trimmed.match(/^\[REWARD:(.+)\]$/);
+      if (rewardMatch) {
+        if (textBuffer.length > 0) {
+          parts.push({ type: 'text', content: textBuffer.join('\n') });
+          textBuffer = [];
+        }
+        const rewardParts = rewardMatch[1].split('|').map(s => s.trim());
+        parts.push({ type: 'reward', title: rewardParts[0], subtitle: rewardParts[1] || '' });
+        continue;
+      }
+
+      textBuffer.push(line);
+    }
+
+    if (textBuffer.length > 0) {
+      const text = textBuffer.join('\n').trim();
+      if (text) parts.push({ type: 'text', content: text });
+    }
+
+    return parts.length > 0 ? parts : [{ type: 'text', content: text }];
+  }
 
   // ===== Build DOM =====
   function createWidget() {
@@ -133,6 +213,9 @@
     inputEl.addEventListener('input', () => {
       sendBtn.disabled = !inputEl.value.trim() || isSending;
     });
+
+    // Fire impression tracking
+    trackImpression();
   }
 
   // ===== Toggle Chat =====
@@ -165,6 +248,15 @@
     return res.json();
   }
 
+  // ===== Impression Tracking =====
+  function trackImpression() {
+    if (impressionSent) return;
+    impressionSent = true;
+    apiPost(`/api/bots/${BOT_ID}/impression`, {
+      sourceUrl: window.location.href,
+    }).catch(() => {}); // Fire and forget
+  }
+
   // ===== Start Conversation =====
   async function startConversation() {
     try {
@@ -178,25 +270,25 @@
 
       hideTyping();
       messages.forEach((m) => {
-        if (m.role === 'assistant') addMessage(m.content, 'bot');
+        if (m.role === 'assistant') addBotMessage(m.content);
       });
     } catch (err) {
       hideTyping();
-      addMessage('Sorry, I\'m having trouble connecting. Please try again later.', 'bot');
+      addSimpleMessage('Sorry, I\'m having trouble connecting. Please try again later.', 'bot');
       console.error('[Graviq] Start conversation error:', err);
     }
   }
 
   // ===== Send Message =====
-  async function sendMessage() {
-    const text = inputEl.value.trim();
+  async function sendMessage(overrideText) {
+    const text = overrideText || inputEl.value.trim();
     if (!text || isSending || !conversationId) return;
 
     isSending = true;
     sendBtn.disabled = true;
-    inputEl.value = '';
+    if (!overrideText) inputEl.value = '';
 
-    addMessage(text, 'user');
+    addSimpleMessage(text, 'user');
     showTyping();
 
     try {
@@ -206,7 +298,7 @@
       });
 
       hideTyping();
-      addMessage(data.reply, 'bot');
+      addBotMessage(data.reply);
 
       // Update progress bar
       if (data.progress) {
@@ -214,7 +306,7 @@
       }
     } catch (err) {
       hideTyping();
-      addMessage('Oops! Something went wrong. Let me try again...', 'bot');
+      addSimpleMessage('Oops! Something went wrong. Let me try again...', 'bot');
       console.error('[Graviq] Message error:', err);
     } finally {
       isSending = false;
@@ -224,12 +316,239 @@
   }
 
   // ===== UI Helpers =====
-  function addMessage(text, sender) {
+
+  /** Add a simple text message bubble */
+  function addSimpleMessage(text, sender) {
     const msg = document.createElement('div');
     msg.className = `graviq-message ${sender}`;
     msg.textContent = text;
     messagesEl.appendChild(msg);
     messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  /** Add a bot message with gamification parsing */
+  function addBotMessage(text) {
+    const parts = parseGamification(text);
+
+    for (const part of parts) {
+      switch (part.type) {
+        case 'text':
+          addSimpleMessage(part.content, 'bot');
+          break;
+        case 'buttons':
+          renderButtons(part.options);
+          break;
+        case 'quiz':
+          renderQuiz(part.question, part.options);
+          break;
+        case 'spin_wheel':
+          renderSpinWheel();
+          break;
+        case 'reward':
+          renderReward(part.title, part.subtitle);
+          break;
+      }
+    }
+  }
+
+  /** Render quick-reply buttons */
+  function renderButtons(options) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'graviq-buttons-wrapper';
+
+    options.forEach((label) => {
+      const btn = document.createElement('button');
+      btn.className = 'graviq-quick-btn';
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        // Disable all buttons in this group
+        wrapper.querySelectorAll('.graviq-quick-btn').forEach(b => {
+          b.disabled = true;
+          b.classList.remove('selected');
+        });
+        btn.classList.add('selected');
+        sendMessage(label);
+      });
+      wrapper.appendChild(btn);
+    });
+
+    messagesEl.appendChild(wrapper);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  /** Render a quiz card */
+  function renderQuiz(question, options) {
+    const card = document.createElement('div');
+    card.className = 'graviq-quiz-card';
+
+    const header = document.createElement('div');
+    header.className = 'graviq-quiz-header';
+    header.innerHTML = '🧠 Quick Quiz';
+
+    const q = document.createElement('div');
+    q.className = 'graviq-quiz-question';
+    q.textContent = question;
+
+    const optionsEl = document.createElement('div');
+    optionsEl.className = 'graviq-quiz-options';
+
+    options.forEach((label, idx) => {
+      const opt = document.createElement('button');
+      opt.className = 'graviq-quiz-option';
+      opt.innerHTML = `<span class="graviq-quiz-letter">${String.fromCharCode(65 + idx)}</span>${label}`;
+      opt.addEventListener('click', () => {
+        optionsEl.querySelectorAll('.graviq-quiz-option').forEach(o => {
+          o.disabled = true;
+          o.classList.remove('selected');
+        });
+        opt.classList.add('selected');
+        sendMessage(label);
+      });
+      optionsEl.appendChild(opt);
+    });
+
+    card.appendChild(header);
+    card.appendChild(q);
+    card.appendChild(optionsEl);
+    messagesEl.appendChild(card);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  /** Render a spin-the-wheel */
+  function renderSpinWheel() {
+    const card = document.createElement('div');
+    card.className = 'graviq-spin-card';
+
+    const title = document.createElement('div');
+    title.className = 'graviq-spin-title';
+    title.textContent = '🎰 Spin to Win!';
+
+    const wheelContainer = document.createElement('div');
+    wheelContainer.className = 'graviq-wheel-container';
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 220;
+    canvas.height = 220;
+    canvas.className = 'graviq-wheel-canvas';
+    wheelContainer.appendChild(canvas);
+
+    const pointer = document.createElement('div');
+    pointer.className = 'graviq-wheel-pointer';
+    pointer.textContent = '▼';
+    wheelContainer.appendChild(pointer);
+
+    const resultEl = document.createElement('div');
+    resultEl.className = 'graviq-spin-result';
+
+    const spinBtn = document.createElement('button');
+    spinBtn.className = 'graviq-spin-btn';
+    spinBtn.textContent = 'SPIN!';
+
+    card.appendChild(title);
+    card.appendChild(wheelContainer);
+    card.appendChild(resultEl);
+    card.appendChild(spinBtn);
+    messagesEl.appendChild(card);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    // Draw wheel
+    drawWheel(canvas);
+
+    // Spin handler
+    spinBtn.addEventListener('click', () => {
+      spinBtn.disabled = true;
+      spinBtn.textContent = 'Spinning...';
+
+      const segmentAngle = 360 / WHEEL_SEGMENTS.length;
+      const randomIdx = Math.floor(Math.random() * WHEEL_SEGMENTS.length);
+      // Spin 5-8 full rotations + land on random segment
+      const extraRotations = (5 + Math.random() * 3) * 360;
+      const targetAngle = extraRotations + (360 - randomIdx * segmentAngle - segmentAngle / 2);
+
+      canvas.style.transition = 'transform 4s cubic-bezier(0.17, 0.67, 0.12, 0.99)';
+      canvas.style.transform = `rotate(${targetAngle}deg)`;
+
+      setTimeout(() => {
+        const wonSegment = WHEEL_SEGMENTS[randomIdx];
+        resultEl.textContent = `🎉 You won: ${wonSegment.label}!`;
+        resultEl.classList.add('visible');
+        spinBtn.textContent = 'Claim Reward ↓';
+        spinBtn.disabled = false;
+        spinBtn.onclick = () => {
+          spinBtn.disabled = true;
+          sendMessage(`I won ${wonSegment.label}! I'd like to claim it.`);
+        };
+      }, 4200);
+    });
+  }
+
+  /** Draw the wheel segments on a canvas */
+  function drawWheel(canvas) {
+    const ctx = canvas.getContext('2d');
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const r = cx - 10;
+    const segAngle = (2 * Math.PI) / WHEEL_SEGMENTS.length;
+
+    WHEEL_SEGMENTS.forEach((seg, i) => {
+      const startAngle = i * segAngle;
+      const endAngle = startAngle + segAngle;
+
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, startAngle, endAngle);
+      ctx.closePath();
+      ctx.fillStyle = seg.color;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Label
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(startAngle + segAngle / 2);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(seg.label, r * 0.6, 4);
+      ctx.restore();
+    });
+
+    // Center circle
+    ctx.beginPath();
+    ctx.arc(cx, cy, 18, 0, 2 * Math.PI);
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  /** Render a reward card with confetti */
+  function renderReward(title, subtitle) {
+    const card = document.createElement('div');
+    card.className = 'graviq-reward-card';
+
+    card.innerHTML = `
+      <div class="graviq-reward-confetti"></div>
+      <div class="graviq-reward-icon">🎁</div>
+      <div class="graviq-reward-title">${escapeHtml(title)}</div>
+      ${subtitle ? `<div class="graviq-reward-subtitle">${escapeHtml(subtitle)}</div>` : ''}
+    `;
+
+    messagesEl.appendChild(card);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    // Trigger confetti animation
+    setTimeout(() => card.classList.add('revealed'), 100);
+  }
+
+  /** Escape HTML to prevent XSS */
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
   }
 
   function showTyping() {

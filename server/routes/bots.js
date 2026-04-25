@@ -192,7 +192,7 @@ router.get('/:id/embed', param('id').isUUID(), async (req, res) => {
     position: "${position}"
   };
 </script>
-<script src="${widgetBaseUrl}/widget.js"></script>`;
+<script src="${widgetBaseUrl}/widget.js" defer></script>`;
 
     res.json({ embedCode });
   } catch (err) {

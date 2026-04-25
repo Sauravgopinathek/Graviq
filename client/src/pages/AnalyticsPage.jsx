@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, PieChart, Pie, Cell
+  BarChart, Bar, PieChart, Pie, Cell, Funnel, FunnelChart, LabelList
 } from 'recharts';
 import api from '../api/client';
 
 const COLORS = ['#6C5CE7', '#00D2FF', '#00E676', '#FFB74D', '#FF5252'];
+const SENTIMENT_COLORS = { positive: '#00E676', neutral: '#FFB74D', negative: '#FF5252', unknown: '#6B6B8D' };
 
 export default function AnalyticsPage() {
   const [bots, setBots] = useState([]);
@@ -81,6 +82,19 @@ export default function AnalyticsPage() {
       ]
     : [];
 
+  const sentimentData = (analytics?.sentimentBreakdown || []).map(s => ({
+    name: s.sentiment.charAt(0).toUpperCase() + s.sentiment.slice(1),
+    value: parseInt(s.count),
+    color: SENTIMENT_COLORS[s.sentiment] || SENTIMENT_COLORS.unknown,
+  }));
+
+  const stageLabels = { START: 'Opened Chat', ASK_NAME: 'Exploring', ASK_PHONE: 'Interested', COMPLETE: 'Converted' };
+  const stageDropOffData = (analytics?.stageDropOff || []).map(s => ({
+    name: stageLabels[s.stage] || s.stage,
+    value: parseInt(s.count),
+    fill: s.stage === 'COMPLETE' ? '#00E676' : s.stage === 'ASK_PHONE' ? '#00D2FF' : s.stage === 'ASK_NAME' ? '#FFB74D' : '#6C5CE7',
+  }));
+
   return (
     <div className="animate-in">
       <div className="page-header">
@@ -105,7 +119,11 @@ export default function AnalyticsPage() {
       ) : analytics ? (
         <>
           {/* Stats */}
-          <div className="stats-grid">
+          <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+            <div className="card stat-card">
+              <div className="stat-card-label">Impressions</div>
+              <div className="stat-card-value">{analytics.totalImpressions || 0}</div>
+            </div>
             <div className="card stat-card">
               <div className="stat-card-label">Conversations</div>
               <div className="stat-card-value">{analytics.totalConversations}</div>
@@ -119,12 +137,32 @@ export default function AnalyticsPage() {
               <div className="stat-card-value">{analytics.conversionRate}%</div>
             </div>
             <div className="card stat-card">
-              <div className="stat-card-label">Avg Messages/Chat</div>
-              <div className="stat-card-value">{analytics.avgMessagesPerChat}</div>
+              <div className="stat-card-label">Avg Lead Quality</div>
+              <div className="stat-card-value">{(analytics.avgLeadQuality * 100).toFixed(0) || 0}%</div>
             </div>
           </div>
 
-          {/* Charts */}
+          {/* Secondary Stats */}
+          <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 24 }}>
+            <div className="card stat-card">
+              <div className="stat-card-label">Avg Messages/Chat</div>
+              <div className="stat-card-value">{analytics.avgMessagesPerChat}</div>
+            </div>
+            <div className="card stat-card">
+              <div className="stat-card-label">Drop-offs</div>
+              <div className="stat-card-value">{analytics.dropOffs}</div>
+            </div>
+            <div className="card stat-card">
+              <div className="stat-card-label">Widget → Chat Rate</div>
+              <div className="stat-card-value">
+                {analytics.totalImpressions > 0
+                  ? ((analytics.totalConversations / analytics.totalImpressions) * 100).toFixed(1)
+                  : 0}%
+              </div>
+            </div>
+          </div>
+
+          {/* Charts Row 1 */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 24 }}>
             {/* Conversations Over Time */}
             <div className="card" style={{ padding: 24 }}>
@@ -183,32 +221,88 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
-          {/* Conversion Pie */}
-          <div className="card" style={{ padding: 24, maxWidth: 400 }}>
-            <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 20 }}>Conversion Breakdown</h3>
-            {analytics.totalConversations > 0 ? (
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={90}
-                    paddingAngle={5}
-                    dataKey="value"
-                    label={({ name, value }) => `${name}: ${value}`}
-                  >
-                    {pieData.map((_, index) => (
-                      <Cell key={index} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 40 }}>No data yet</p>
-            )}
+          {/* Charts Row 2 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 24, marginBottom: 24 }}>
+            {/* Conversion Pie */}
+            <div className="card" style={{ padding: 24 }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 20 }}>Conversion Breakdown</h3>
+              {analytics.totalConversations > 0 ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="value"
+                      label={({ name, value }) => `${name}: ${value}`}
+                    >
+                      {pieData.map((_, index) => (
+                        <Cell key={index} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 40 }}>No data yet</p>
+              )}
+            </div>
+
+            {/* Stage Drop-off Funnel */}
+            <div className="card" style={{ padding: 24 }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 20 }}>Drop-off Funnel</h3>
+              {stageDropOffData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={stageDropOffData} layout="vertical">
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(108,92,231,0.1)" />
+                    <XAxis type="number" tick={{ fill: '#6B6B8D', fontSize: 11 }} />
+                    <YAxis dataKey="name" type="category" width={90} tick={{ fill: '#6B6B8D', fontSize: 11 }} />
+                    <Tooltip
+                      contentStyle={{ background: '#16163A', border: '1px solid rgba(108,92,231,0.3)', borderRadius: 8 }}
+                      labelStyle={{ color: '#F0F0F8' }}
+                    />
+                    <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                      {stageDropOffData.map((entry, index) => (
+                        <Cell key={index} fill={entry.fill} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 40 }}>No data yet</p>
+              )}
+            </div>
+
+            {/* Sentiment Breakdown */}
+            <div className="card" style={{ padding: 24 }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 20 }}>Sentiment Analysis</h3>
+              {sentimentData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie
+                      data={sentimentData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="value"
+                      label={({ name, value }) => `${name}: ${value}`}
+                    >
+                      {sentimentData.map((entry, index) => (
+                        <Cell key={index} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 40 }}>No sentiment data yet</p>
+              )}
+            </div>
           </div>
         </>
       ) : null}

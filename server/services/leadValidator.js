@@ -31,6 +31,14 @@ function validatePhone(phone) {
 }
 
 /**
+ * Validate an email address.
+ */
+function validateEmail(email) {
+  if (!email || typeof email !== 'string') return false;
+  return /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(email.trim());
+}
+
+/**
  * Extract lead info (name, phone, email) from conversation messages.
  * Uses simple heuristic pattern matching on user messages.
  */
@@ -71,4 +79,4 @@ function extractLeadInfo(messages) {
   return lead;
 }
 
-module.exports = { validateName, validatePhone, extractLeadInfo };
+module.exports = { validateName, validatePhone, validateEmail, extractLeadInfo };

@@ -1,5 +1,5 @@
 const db = require('../db');
-const { validateName, validatePhone } = require('./leadValidator');
+const { validateName, validatePhone, validateEmail } = require('./leadValidator');
 
 const STAGES = {
   START: 'START',
@@ -34,12 +34,28 @@ async function getOrCreateSession(conversationId) {
 /**
  * Update session based on user message
  */
-async function updateSession(sessionId, userMessage, currentStage) {
+async function updateSession(sessionId, userMessage, currentStage, conversationId) {
   const updates = { stage: currentStage };
+
+  // Always try to extract email opportunistically from any message
+  const email = extractEmail(userMessage);
+  if (email && validateEmail(email)) {
+    updates.email = email;
+  }
 
   switch (currentStage) {
     case STAGES.START:
-      updates.stage = STAGES.ASK_NAME;
+      // Stay in START for at least 2 exchanges to build rapport
+      const conv = await db.query(
+        'SELECT messages FROM conversations WHERE id = $1',
+        [conversationId]
+      );
+      const messageCount = (conv.rows[0].messages || []).length;
+      
+      // Move to ASK_NAME after 3+ messages (including bot responses)
+      if (messageCount >= 3) {
+        updates.stage = STAGES.ASK_NAME;
+      }
       break;
 
     case STAGES.ASK_NAME:
@@ -66,12 +82,13 @@ async function updateSession(sessionId, userMessage, currentStage) {
   const result = await db.query(
     `UPDATE sessions 
      SET name = COALESCE($1, name), 
-         phone = COALESCE($2, phone), 
-         stage = $3, 
+         phone = COALESCE($2, phone),
+         email = COALESCE($3, email),
+         stage = $4, 
          updated_at = NOW() 
-     WHERE id = $4 
+     WHERE id = $5 
      RETURNING *`,
-    [updates.name, updates.phone, updates.stage, sessionId]
+    [updates.name, updates.phone, updates.email, updates.stage, sessionId]
   );
 
   return result.rows[0];
@@ -98,6 +115,17 @@ function extractPhone(message) {
   const phoneMatch = message.match(/(?:\+?\d[\d\s\-\(\)\.]{6,15}\d)/);
   if (phoneMatch) {
     return phoneMatch[0].replace(/[\s\-\(\)\.]/g, '');
+  }
+  return null;
+}
+
+/**
+ * Extract email from user message
+ */
+function extractEmail(message) {
+  const emailMatch = message.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+  if (emailMatch) {
+    return emailMatch[0].toLowerCase();
   }
   return null;
 }

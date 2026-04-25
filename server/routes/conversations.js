@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, param, validationResult } = require('express-validator');
 const db = require('../db');
-const { generateReply } = require('../services/ai');
+const { generateReply, classifyIntent, analyzeSentiment } = require('../services/ai');
 const { getOrCreateSession, updateSession, STAGES } = require('../services/sessionManager');
 
 const router = express.Router();
@@ -111,7 +111,7 @@ router.post(
       messages.push({ role: 'user', content });
 
       // Update session based on user input
-      const updatedSession = await updateSession(session.id, content, session.stage);
+      const updatedSession = await updateSession(session.id, content, session.stage, conversation.id);
 
       // Generate AI reply with session context
       const sessionData = { name: updatedSession.name, phone: updatedSession.phone };
@@ -120,26 +120,48 @@ router.post(
 
       // Create or update lead if session is complete
       let leadId = conversation.lead_id;
+      let leadIntent = null;
+      let leadConfidence = null;
+      let conversationSentiment = null;
+
       if (updatedSession.stage === STAGES.COMPLETE && updatedSession.name && updatedSession.phone) {
+        // Run intent classification and sentiment analysis in parallel
+        const [intentResult, sentimentResult] = await Promise.all([
+          classifyIntent(bot.config, messages),
+          analyzeSentiment(bot.config, messages),
+        ]);
+
+        leadIntent = intentResult.intent;
+        leadConfidence = intentResult.confidence;
+        conversationSentiment = sentimentResult;
+
         if (!leadId) {
           const leadResult = await db.query(
-            `INSERT INTO leads (bot_id, name, phone, source_url, intent, confidence_score)
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-            [bot.id, updatedSession.name, updatedSession.phone, req.body.sourceUrl || null, 'interested', 0.8]
+            `INSERT INTO leads (bot_id, name, phone, email, source_url, intent, confidence_score)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+            [
+              bot.id,
+              updatedSession.name,
+              updatedSession.phone,
+              updatedSession.email || null,
+              req.body.sourceUrl || null,
+              leadIntent,
+              leadConfidence,
+            ]
           );
           leadId = leadResult.rows[0].id;
         } else {
           await db.query(
-            'UPDATE leads SET name = $1, phone = $2 WHERE id = $3',
-            [updatedSession.name, updatedSession.phone, leadId]
+            'UPDATE leads SET name = $1, phone = $2, email = $3, intent = $4, confidence_score = $5 WHERE id = $6',
+            [updatedSession.name, updatedSession.phone, updatedSession.email || null, leadIntent, leadConfidence, leadId]
           );
         }
       }
 
       // Update conversation
       await db.query(
-        'UPDATE conversations SET messages = $1, lead_id = $2, updated_at = NOW() WHERE id = $3',
-        [JSON.stringify(messages), leadId, conversation.id]
+        'UPDATE conversations SET messages = $1, lead_id = $2, sentiment = $3, updated_at = NOW() WHERE id = $4',
+        [JSON.stringify(messages), leadId, conversationSentiment, conversation.id]
       );
 
       // Calculate progress

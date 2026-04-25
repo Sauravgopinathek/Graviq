@@ -11,6 +11,7 @@ const botRoutes = require('./routes/bots');
 const leadRoutes = require('./routes/leads');
 const conversationRoutes = require('./routes/conversations');
 const analyticsRoutes = require('./routes/analytics');
+const { authLimiter, conversationCreateLimiter, messageLimiter } = require('./middleware/rateLimit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,8 +32,8 @@ app.get('/test', (req, res) => {
   res.sendFile(path.join(__dirname, '../test-website.html'));
 });
 
-// API Routes
-app.use('/api/auth', authRoutes);
+// API Routes with rate limiting
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/bots', botRoutes);
 app.use('/api', leadRoutes);
 app.use('/api/conversations', conversationRoutes);
@@ -54,4 +55,3 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
-
