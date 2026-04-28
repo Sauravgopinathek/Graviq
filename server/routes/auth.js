@@ -26,11 +26,27 @@ const appUrl = process.env.APP_URL || 'http://localhost:5173';
 const googleClient = process.env.GOOGLE_CLIENT_ID
   ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
   : null;
+const DEMO_LOGIN_EMAIL = (process.env.DEMO_LOGIN_EMAIL || 'demo@graviq.dev').toLowerCase();
+const DEMO_LOGIN_PASSWORD = process.env.DEMO_LOGIN_PASSWORD || 'Demo1234!';
 
 function createAuthToken(user) {
   return jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, {
     expiresIn: '7d',
   });
+}
+
+async function ensureDemoUser() {
+  const passwordHash = await bcrypt.hash(DEMO_LOGIN_PASSWORD, 12);
+  const result = await db.query(
+    `INSERT INTO users (email, password_hash, is_verified)
+     VALUES ($1, $2, true)
+     ON CONFLICT (email)
+     DO UPDATE SET password_hash = EXCLUDED.password_hash, is_verified = true
+     RETURNING id, email, plan, created_at`,
+    [DEMO_LOGIN_EMAIL, passwordHash]
+  );
+
+  return result.rows[0];
 }
 
 async function verifyGoogleCredential(credential) {
@@ -249,6 +265,18 @@ router.post(
     const { email, password } = req.body;
 
     try {
+      if (email === DEMO_LOGIN_EMAIL && password === DEMO_LOGIN_PASSWORD) {
+        const user = await ensureDemoUser();
+        const token = createAuthToken(user);
+
+        sendLoginAlertEmail(user.email).catch(console.error);
+
+        return res.json({
+          token,
+          user,
+        });
+      }
+
       const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
       if (result.rows.length === 0) {
         return res.status(401).json({ error: 'Invalid credentials' });
