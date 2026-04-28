@@ -31,6 +31,18 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (token) {
+      // If this is the local demo session token, restore user from localStorage and skip the API call
+      if (token === 'demo-local-token') {
+        try {
+          const stored = localStorage.getItem('graviq_user');
+          if (stored) setUser(JSON.parse(stored));
+        } catch (e) {
+          // ignore parse errors
+        }
+        setLoading(false);
+        return;
+      }
+
       api.get('/api/auth/me')
         .then((res) => {
           setUser(res.data.user);
