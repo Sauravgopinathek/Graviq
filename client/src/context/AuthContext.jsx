@@ -4,6 +4,10 @@ import api from '../api/client';
 const AuthContext = createContext(null);
 const PENDING_AUTH_KEY = 'graviq_pending_auth';
 
+// Demo credentials (can be overridden via Vite env vars)
+const DEMO_LOGIN_EMAIL = import.meta.env.VITE_DEMO_LOGIN_EMAIL || 'demo@graviq.dev';
+const DEMO_LOGIN_PASSWORD = import.meta.env.VITE_DEMO_LOGIN_PASSWORD || 'Demo1234!';
+
 function readPendingAuth() {
   const stored = sessionStorage.getItem(PENDING_AUTH_KEY);
 
@@ -41,6 +45,19 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   const login = async (email, password) => {
+    // Shortcut for demo credentials: create a local demo session without contacting the backend
+    if (email === DEMO_LOGIN_EMAIL && password === DEMO_LOGIN_PASSWORD) {
+      const userData = {
+        id: '00000000-0000-0000-0000-000000000000',
+        email: DEMO_LOGIN_EMAIL,
+        plan: 'free',
+        created_at: new Date().toISOString(),
+      };
+      const fakeToken = 'demo-local-token';
+      setAuth({ token: fakeToken, user: userData });
+      return { token: fakeToken, user: userData };
+    }
+
     const res = await api.post('/api/auth/login', { email, password });
     if (res.data.requiresOtp) {
       setPendingAuth(res.data);
