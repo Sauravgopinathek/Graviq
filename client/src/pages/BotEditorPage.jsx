@@ -11,6 +11,10 @@ export default function BotEditorPage() {
   const [saving, setSaving] = useState(false);
   const [embedCode, setEmbedCode] = useState('');
   const [copied, setCopied] = useState(false);
+  const [knowledge, setKnowledge] = useState(null);
+  const [crawlUrl, setCrawlUrl] = useState('');
+  const [crawlMaxPages, setCrawlMaxPages] = useState(25);
+  const [crawling, setCrawling] = useState(false);
 
   const [form, setForm] = useState({
     name: '',
@@ -45,6 +49,9 @@ export default function BotEditorPage() {
         theme: bot.config?.theme || 'dark',
         position: bot.config?.position || 'bottom-right',
       });
+      if (!crawlUrl && bot.domains?.[0]) {
+        setCrawlUrl(bot.domains[0].includes('://') ? bot.domains[0] : `https://${bot.domains[0]}`);
+      }
 
       // Load embed code
       try {
@@ -52,6 +59,13 @@ export default function BotEditorPage() {
         setEmbedCode(embedRes.data.embedCode);
       } catch {
         // ignore
+      }
+
+      try {
+        const knowledgeRes = await api.get(`/api/bots/${id}/knowledge`);
+        setKnowledge(knowledgeRes.data.knowledge);
+      } catch {
+        setKnowledge(null);
       }
     } catch (err) {
       console.error('Failed to load bot:', err);
@@ -103,6 +117,29 @@ export default function BotEditorPage() {
     navigator.clipboard.writeText(embedCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const crawlWebsite = async () => {
+    if (!crawlUrl.trim()) {
+      alert('Enter a website URL to crawl.');
+      return;
+    }
+
+    setCrawling(true);
+    try {
+      await api.post(`/api/bots/${id}/crawl`, {
+        startUrl: crawlUrl.trim(),
+        maxPages: Number(crawlMaxPages) || 25,
+      });
+      const knowledgeRes = await api.get(`/api/bots/${id}/knowledge`);
+      setKnowledge(knowledgeRes.data.knowledge);
+      alert('Website knowledge indexed successfully.');
+    } catch (err) {
+      console.error('Failed to crawl website:', err);
+      alert(err.response?.data?.error || 'Failed to crawl website. Please check the URL and try again.');
+    } finally {
+      setCrawling(false);
+    }
   };
 
   if (loading) {
@@ -258,6 +295,52 @@ export default function BotEditorPage() {
                 📋 View Leads
               </button>
             </div>
+          </div>
+        )}
+
+        {!isNew && (
+          <div className="card" style={{ gridColumn: '2', marginTop: embedCode ? 20 : 0 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Website Knowledge</h3>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+              Crawl sitemap.xml or internal pages, then store vectorized website chunks for AI answers.
+            </p>
+
+            <div className="form-group">
+              <label className="form-label">Website URL</label>
+              <input
+                type="url"
+                className="form-input"
+                value={crawlUrl}
+                onChange={(e) => setCrawlUrl(e.target.value)}
+                placeholder="https://example.com"
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Max Pages</label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                className="form-input"
+                value={crawlMaxPages}
+                onChange={(e) => setCrawlMaxPages(e.target.value)}
+              />
+            </div>
+
+            <button className="btn btn-primary" type="button" onClick={crawlWebsite} disabled={crawling}>
+              {crawling ? 'Indexing...' : 'Crawl & Vectorize'}
+            </button>
+
+            {knowledge && (
+              <div style={{ marginTop: 16, fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7 }}>
+                <div>Indexed pages: {knowledge.documents}</div>
+                <div>Vector chunks: {knowledge.chunks}</div>
+                {knowledge.sources?.[0] && (
+                  <div>Last crawl: {knowledge.sources[0].status} ({knowledge.sources[0].page_count} pages)</div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

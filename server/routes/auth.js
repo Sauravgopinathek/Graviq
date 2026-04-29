@@ -28,6 +28,8 @@ const googleClient = process.env.GOOGLE_CLIENT_ID
   : null;
 const DEMO_LOGIN_EMAIL = (process.env.DEMO_LOGIN_EMAIL || 'demo@graviq.dev').toLowerCase();
 const DEMO_LOGIN_PASSWORD = process.env.DEMO_LOGIN_PASSWORD || 'Demo1234!';
+const DEMO_BOT_ID = process.env.DEMO_BOT_ID || 'ac0df4fd-9bda-41b6-b143-6523d7e93b9f';
+const DEFAULT_NVIDIA_MODEL = process.env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct';
 
 function createAuthToken(user) {
   return jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, {
@@ -47,6 +49,48 @@ async function ensureDemoUser() {
   );
 
   return result.rows[0];
+}
+
+async function ensureDemoBot(userId) {
+  const demoConfig = {
+    welcomeMessage: 'Hello! Ask me anything about this page.',
+    businessName: 'Graviq Demo Website',
+    businessContext:
+      'This is a demo bot for testing Graviq on a website. It should answer questions using the current website page context sent by the embedded widget, then help capture leads naturally.',
+    tone: 'friendly',
+    language: 'English',
+    theme: 'dark',
+    position: 'bottom-right',
+    model: DEFAULT_NVIDIA_MODEL,
+  };
+
+  const result = await db.query(
+    `INSERT INTO bots (id, user_id, name, config, domains)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (id)
+     DO UPDATE SET
+       user_id = EXCLUDED.user_id,
+       name = EXCLUDED.name,
+       config = EXCLUDED.config,
+       domains = EXCLUDED.domains,
+       updated_at = NOW()
+     RETURNING id`,
+    [
+      DEMO_BOT_ID,
+      userId,
+      'Demo Website Bot',
+      JSON.stringify(demoConfig),
+      ['localhost', '127.0.0.1'],
+    ]
+  );
+
+  return result.rows[0];
+}
+
+async function ensureDemoWorkspace() {
+  const user = await ensureDemoUser();
+  await ensureDemoBot(user.id);
+  return user;
 }
 
 async function verifyGoogleCredential(credential) {
@@ -266,7 +310,7 @@ router.post(
 
     try {
       if (email === DEMO_LOGIN_EMAIL && password === DEMO_LOGIN_PASSWORD) {
-        const user = await ensureDemoUser();
+        const user = await ensureDemoWorkspace();
         const token = createAuthToken(user);
 
         sendLoginAlertEmail(user.email).catch(console.error);

@@ -74,6 +74,7 @@
   let isOpen = false;
   let isSending = false;
   let impressionSent = false;
+  let pageContextCache = null;
 
   // ===== DOM Elements =====
   let container, toggleBtn, chatWindow, messagesEl, inputEl, sendBtn, typingEl, progressEl, progressFill, progressLabel;
@@ -81,67 +82,37 @@
   // ===== Gamification Marker Parser =====
   function parseGamification(text) {
     const parts = [];
-    const lines = text.split('\n');
-    let textBuffer = [];
+    const markerRegex = /\[(BUTTONS|QUIZ|REWARD):([^\]]+)\]|\[SPIN_WHEEL\]/g;
+    let lastIndex = 0;
+    let match;
 
-    for (const line of lines) {
-      const trimmed = line.trim();
+    function addTextPart(value) {
+      const content = value.trim();
+      if (content) parts.push({ type: 'text', content });
+    }
 
-      // [BUTTONS:Option A|Option B|Option C]
-      const buttonsMatch = trimmed.match(/^\[BUTTONS:(.+)\]$/);
-      if (buttonsMatch) {
-        if (textBuffer.length > 0) {
-          parts.push({ type: 'text', content: textBuffer.join('\n') });
-          textBuffer = [];
-        }
-        const options = buttonsMatch[1].split('|').map(s => s.trim());
-        parts.push({ type: 'buttons', options });
-        continue;
-      }
+    while ((match = markerRegex.exec(text)) !== null) {
+      addTextPart(text.slice(lastIndex, match.index));
 
-      // [QUIZ:Question?|Option A|Option B|Option C]
-      const quizMatch = trimmed.match(/^\[QUIZ:(.+)\]$/);
-      if (quizMatch) {
-        if (textBuffer.length > 0) {
-          parts.push({ type: 'text', content: textBuffer.join('\n') });
-          textBuffer = [];
-        }
-        const quizParts = quizMatch[1].split('|').map(s => s.trim());
-        const question = quizParts[0];
-        const options = quizParts.slice(1);
-        parts.push({ type: 'quiz', question, options });
-        continue;
-      }
-
-      // [SPIN_WHEEL]
-      if (trimmed === '[SPIN_WHEEL]') {
-        if (textBuffer.length > 0) {
-          parts.push({ type: 'text', content: textBuffer.join('\n') });
-          textBuffer = [];
-        }
+      if (match[0] === '[SPIN_WHEEL]') {
         parts.push({ type: 'spin_wheel' });
-        continue;
-      }
-
-      // [REWARD:Title|Subtitle]
-      const rewardMatch = trimmed.match(/^\[REWARD:(.+)\]$/);
-      if (rewardMatch) {
-        if (textBuffer.length > 0) {
-          parts.push({ type: 'text', content: textBuffer.join('\n') });
-          textBuffer = [];
+      } else if (match[1] === 'BUTTONS') {
+        const options = match[2].split('|').map(s => s.trim()).filter(Boolean);
+        if (options.length > 0) parts.push({ type: 'buttons', options });
+      } else if (match[1] === 'QUIZ') {
+        const quizParts = match[2].split('|').map(s => s.trim()).filter(Boolean);
+        if (quizParts.length >= 2) {
+          parts.push({ type: 'quiz', question: quizParts[0], options: quizParts.slice(1) });
         }
-        const rewardParts = rewardMatch[1].split('|').map(s => s.trim());
+      } else if (match[1] === 'REWARD') {
+        const rewardParts = match[2].split('|').map(s => s.trim());
         parts.push({ type: 'reward', title: rewardParts[0], subtitle: rewardParts[1] || '' });
-        continue;
       }
 
-      textBuffer.push(line);
+      lastIndex = markerRegex.lastIndex;
     }
 
-    if (textBuffer.length > 0) {
-      const text = textBuffer.join('\n').trim();
-      if (text) parts.push({ type: 'text', content: text });
-    }
+    addTextPart(text.slice(lastIndex));
 
     return parts.length > 0 ? parts : [{ type: 'text', content: text }];
   }
@@ -248,6 +219,61 @@
     return res.json();
   }
 
+  // ===== Host Page Context =====
+  function cleanText(text) {
+    return String(text || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function truncateText(text, maxLength) {
+    if (!text || text.length <= maxLength) return text;
+    return `${text.slice(0, maxLength)}...`;
+  }
+
+  function getMetaContent(selector) {
+    const el = document.querySelector(selector);
+    return el ? cleanText(el.getAttribute('content')) : '';
+  }
+
+  function collectPageContext() {
+    if (pageContextCache) return pageContextCache;
+
+    const clone = document.body ? document.body.cloneNode(true) : null;
+    if (!clone) {
+      pageContextCache = {
+        url: window.location.href,
+        title: cleanText(document.title),
+        text: '',
+      };
+      return pageContextCache;
+    }
+
+    clone
+      .querySelectorAll('script, style, noscript, svg, canvas, iframe, input, textarea, button, select, .graviq-widget-container')
+      .forEach((el) => el.remove());
+
+    const headings = Array.from(clone.querySelectorAll('h1, h2, h3'))
+      .map((el) => cleanText(el.textContent))
+      .filter(Boolean)
+      .slice(0, 20);
+
+    const pageText = cleanText(clone.innerText || clone.textContent || '');
+    const description =
+      getMetaContent('meta[name="description"]') ||
+      getMetaContent('meta[property="og:description"]');
+
+    pageContextCache = {
+      url: window.location.href,
+      title: cleanText(document.title),
+      description,
+      headings,
+      text: truncateText(pageText, 8000),
+    };
+
+    return pageContextCache;
+  }
+
   // ===== Impression Tracking =====
   function trackImpression() {
     if (impressionSent) return;
@@ -264,6 +290,7 @@
       const data = await apiPost('/api/conversations', {
         botId: BOT_ID,
         sourceUrl: window.location.href,
+        pageContext: collectPageContext(),
       });
       conversationId = data.conversation.id;
       const messages = data.conversation.messages || [];
@@ -295,6 +322,7 @@
       const data = await apiPost(`/api/conversations/${conversationId}/message`, {
         content: text,
         sourceUrl: window.location.href,
+        pageContext: collectPageContext(),
       });
 
       hideTyping();

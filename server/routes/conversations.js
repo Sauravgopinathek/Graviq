@@ -3,6 +3,7 @@ const { body, param, validationResult } = require('express-validator');
 const db = require('../db');
 const { generateReply, classifyIntent, analyzeSentiment } = require('../services/ai');
 const { getOrCreateSession, updateSession, STAGES } = require('../services/sessionManager');
+const { retrieveKnowledgeContext } = require('../services/knowledge');
 
 const router = express.Router();
 
@@ -36,7 +37,11 @@ function isAllowedDomain(hostname, domains) {
 // POST /api/conversations — start a new conversation (public)
 router.post(
   '/',
-  [body('botId').isUUID(), body('sourceUrl').optional().isString()],
+  [
+    body('botId').isUUID(),
+    body('sourceUrl').optional().isString(),
+    body('pageContext').optional().isObject(),
+  ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -99,14 +104,19 @@ router.post(
 // POST /api/conversations/:id/message — send user message, get AI reply (public)
 router.post(
   '/:id/message',
-  [param('id').isUUID(), body('content').trim().notEmpty()],
+  [
+    param('id').isUUID(),
+    body('content').trim().notEmpty(),
+    body('sourceUrl').optional().isString(),
+    body('pageContext').optional().isObject(),
+  ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { content } = req.body;
+    const { content, pageContext } = req.body;
 
     try {
       // Get conversation
@@ -139,7 +149,15 @@ router.post(
 
       // Generate AI reply with session context
       const sessionData = { name: updatedSession.name, phone: updatedSession.phone };
-      const aiReply = await generateReply(bot.config, messages, updatedSession.stage, sessionData);
+      const knowledgeContext = await retrieveKnowledgeContext(bot.id, content);
+      const aiReply = await generateReply(
+        bot.config,
+        messages,
+        updatedSession.stage,
+        sessionData,
+        pageContext,
+        knowledgeContext
+      );
       messages.push({ role: 'assistant', content: aiReply });
 
       // Create or update lead if session is complete

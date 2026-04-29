@@ -2,6 +2,7 @@ const express = require('express');
 const { body, param, validationResult } = require('express-validator');
 const db = require('../db');
 const authMiddleware = require('../middleware/auth');
+const { crawlAndIndexBot, getKnowledgeStatus } = require('../services/knowledge');
 
 const router = express.Router();
 
@@ -200,5 +201,66 @@ router.get('/:id/embed', param('id').isUUID(), async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// GET /api/bots/:id/knowledge — get website knowledge index status
+router.get('/:id/knowledge', param('id').isUUID(), async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
+  try {
+    const existing = await db.query('SELECT id FROM bots WHERE id = $1 AND user_id = $2', [
+      req.params.id,
+      req.user.id,
+    ]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Bot not found' });
+    }
+
+    const status = await getKnowledgeStatus(req.params.id);
+    res.json({ knowledge: status });
+  } catch (err) {
+    console.error('Knowledge status error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/bots/:id/crawl — crawl and vectorize a website for this bot
+router.post(
+  '/:id/crawl',
+  [
+    param('id').isUUID(),
+    body('startUrl').trim().notEmpty().withMessage('Website URL is required'),
+    body('maxPages').optional().isInt({ min: 1, max: 100 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+      const existing = await db.query('SELECT id FROM bots WHERE id = $1 AND user_id = $2', [
+        req.params.id,
+        req.user.id,
+      ]);
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ error: 'Bot not found' });
+      }
+
+      const result = await crawlAndIndexBot({
+        botId: req.params.id,
+        startUrl: req.body.startUrl,
+        maxPages: req.body.maxPages,
+      });
+
+      res.json({ crawl: result });
+    } catch (err) {
+      console.error('Crawl bot error:', err);
+      res.status(500).json({ error: err.message || 'Internal server error' });
+    }
+  }
+);
 
 module.exports = router;
