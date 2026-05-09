@@ -57,6 +57,8 @@
     chat: '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>',
     close: '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/></svg>',
     send: '<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>',
+    mic: '<svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>',
+    stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   };
 
   // ===== Spin Wheel Config =====
@@ -76,8 +78,14 @@
   let impressionSent = false;
   let pageContextCache = null;
 
+  // Voice recording state
+  let isRecording = false;
+  let isVoiceSending = false;
+  let mediaRecorder = null;
+  let audioChunks = [];
+
   // ===== DOM Elements =====
-  let container, toggleBtn, chatWindow, messagesEl, inputEl, sendBtn, typingEl, progressEl, progressFill, progressLabel;
+  let container, toggleBtn, chatWindow, messagesEl, inputEl, sendBtn, micBtn, voiceIndicator, typingEl, progressEl, progressFill, progressLabel;
 
   // ===== Gamification Marker Parser =====
   function parseGamification(text) {
@@ -146,8 +154,15 @@
           <div class="graviq-typing-dot"></div>
           <div class="graviq-typing-dot"></div>
         </div>
+        <div class="graviq-voice-indicator" id="graviq-voice-indicator">
+          <div class="graviq-voice-indicator-dot"></div>
+          <span>Recording...</span>
+        </div>
         <div class="graviq-input-area">
           <input type="text" class="graviq-input" id="graviq-input" placeholder="Type a message..." autocomplete="off" />
+          <button class="graviq-mic-btn" id="graviq-mic-btn" title="Voice message">
+            ${ICONS.mic}
+          </button>
           <button class="graviq-send-btn" id="graviq-send-btn" disabled>
             ${ICONS.send}
           </button>
@@ -167,6 +182,8 @@
     messagesEl = document.getElementById('graviq-messages');
     inputEl = document.getElementById('graviq-input');
     sendBtn = document.getElementById('graviq-send-btn');
+    micBtn = document.getElementById('graviq-mic-btn');
+    voiceIndicator = document.getElementById('graviq-voice-indicator');
     typingEl = document.getElementById('graviq-typing');
     progressEl = document.getElementById('graviq-progress');
     progressFill = document.getElementById('graviq-progress-fill');
@@ -175,6 +192,7 @@
     // Event listeners
     toggleBtn.addEventListener('click', toggleChat);
     sendBtn.addEventListener('click', sendMessage);
+    micBtn.addEventListener('click', handleMicClick);
     inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -598,6 +616,160 @@
       } else {
         progressLabel.textContent = '✨ All done! Thanks for chatting!';
       }
+    }
+  }
+
+  // ===== Voice Recording =====
+
+  async function handleMicClick() {
+    if (isVoiceSending) return;
+
+    if (isRecording) {
+      stopRecording();
+    } else {
+      await startRecording();
+    }
+  }
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      audioChunks = [];
+      isRecording = true;
+
+      // Determine best supported mime type
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : 'audio/ogg;codecs=opus';
+
+      mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks to release the mic
+        stream.getTracks().forEach(track => track.stop());
+
+        if (audioChunks.length === 0) {
+          setMicIdle();
+          return;
+        }
+
+        const audioBlob = new Blob(audioChunks, { type: mimeType });
+        audioChunks = [];
+
+        // Don't send very short recordings (< 0.5s worth of data)
+        if (audioBlob.size < 1000) {
+          addSimpleMessage('Recording too short — please hold the mic button a bit longer.', 'bot');
+          setMicIdle();
+          return;
+        }
+
+        await sendVoiceMessage(audioBlob);
+      };
+
+      mediaRecorder.start();
+
+      // Update UI
+      micBtn.classList.add('recording');
+      micBtn.innerHTML = ICONS.stop;
+      micBtn.title = 'Stop recording';
+      voiceIndicator.classList.add('visible');
+      inputEl.placeholder = 'Listening...';
+
+    } catch (err) {
+      console.error('[Graviq] Microphone access error:', err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        addSimpleMessage('🎤 Microphone access denied. Please allow mic permission in your browser settings.', 'bot');
+      } else if (err.name === 'NotFoundError') {
+        addSimpleMessage('🎤 No microphone found. Please connect a microphone and try again.', 'bot');
+      } else {
+        addSimpleMessage('🎤 Unable to access microphone. Please try again.', 'bot');
+      }
+      setMicIdle();
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      isRecording = false;
+      mediaRecorder.stop();
+    }
+  }
+
+  function setMicIdle() {
+    isRecording = false;
+    isVoiceSending = false;
+    micBtn.classList.remove('recording', 'sending');
+    micBtn.innerHTML = ICONS.mic;
+    micBtn.title = 'Voice message';
+    voiceIndicator.classList.remove('visible');
+    inputEl.placeholder = 'Type a message...';
+  }
+
+  async function sendVoiceMessage(audioBlob) {
+    if (!conversationId) return;
+
+    isVoiceSending = true;
+    micBtn.classList.remove('recording');
+    micBtn.classList.add('sending');
+    micBtn.innerHTML = ICONS.mic;
+    micBtn.title = 'Transcribing...';
+    voiceIndicator.classList.remove('visible');
+    inputEl.placeholder = 'Transcribing your voice...';
+
+    showTyping();
+
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+      formData.append('sourceUrl', window.location.href);
+
+      const pageCtx = collectPageContext();
+      if (pageCtx) {
+        formData.append('pageContext', JSON.stringify(pageCtx));
+      }
+
+      const res = await fetch(`${SERVER_URL}/api/conversations/${conversationId}/voice`, {
+        method: 'POST',
+        body: formData, // No Content-Type header — browser sets multipart boundary
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Voice API error: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      hideTyping();
+
+      // Show the transcribed text as user message
+      if (data.transcribedText) {
+        addSimpleMessage(data.transcribedText, 'user');
+      }
+
+      // Show the AI reply
+      addBotMessage(data.reply);
+
+      // Update progress bar
+      if (data.progress) {
+        updateProgress(data.progress);
+      }
+
+    } catch (err) {
+      hideTyping();
+      addSimpleMessage('🎤 Sorry, I couldn\'t understand the audio. Please try again or type your message.', 'bot');
+      console.error('[Graviq] Voice message error:', err);
+    } finally {
+      setMicIdle();
     }
   }
 

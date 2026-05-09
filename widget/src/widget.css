@@ -566,6 +566,104 @@
   fill: #fff;
 }
 
+/* ===== Mic Button ===== */
+.graviq-mic-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: var(--graviq-bg-input);
+  border: 1px solid var(--graviq-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s ease;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.graviq-mic-btn:hover:not(:disabled):not(.recording) {
+  background: rgba(108, 92, 231, 0.2);
+  border-color: var(--graviq-primary);
+  transform: scale(1.05);
+}
+
+.graviq-mic-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: var(--graviq-text-muted);
+  transition: fill 0.2s ease;
+}
+
+.graviq-mic-btn:hover:not(:disabled):not(.recording) svg {
+  fill: var(--graviq-primary);
+}
+
+.graviq-mic-btn.recording {
+  background: rgba(255, 59, 48, 0.15);
+  border-color: #FF3B30;
+  animation: graviqMicPulse 1.5s ease-in-out infinite;
+}
+
+.graviq-mic-btn.recording svg {
+  fill: #FF3B30;
+}
+
+@keyframes graviqMicPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(255, 59, 48, 0); }
+}
+
+.graviq-mic-btn.sending {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.graviq-mic-btn.sending svg {
+  fill: var(--graviq-text-muted);
+  animation: graviqMicSpin 1s linear infinite;
+}
+
+@keyframes graviqMicSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.graviq-mic-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Voice recording indicator */
+.graviq-voice-indicator {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(255, 59, 48, 0.1);
+  border: 1px solid rgba(255, 59, 48, 0.2);
+  border-radius: 20px;
+  font-size: 12px;
+  color: #FF3B30;
+  animation: graviqFadeIn 0.2s ease;
+}
+
+.graviq-voice-indicator.visible { display: flex; }
+
+.graviq-voice-indicator-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #FF3B30;
+  animation: graviqRecordBlink 1s ease-in-out infinite;
+}
+
+@keyframes graviqRecordBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 /* ===== Powered By ===== */
 .graviq-powered {
   text-align: center;

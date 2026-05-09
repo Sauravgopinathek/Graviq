@@ -253,6 +253,7 @@ async function embedText(text) {
     const response = await client.embeddings.create({
       model: DEFAULT_EMBEDDING_MODEL,
       input: text.slice(0, 6000),
+      extra_body: { input_type: 'query' },
     });
 
     return normalizeVector(response.data[0].embedding.map(Number));

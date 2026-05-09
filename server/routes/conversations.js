@@ -1,11 +1,26 @@
 const express = require('express');
 const { body, param, validationResult } = require('express-validator');
+const multer = require('multer');
 const db = require('../db');
 const { generateReply, classifyIntent, analyzeSentiment } = require('../services/ai');
 const { getOrCreateSession, updateSession, STAGES } = require('../services/sessionManager');
 const { retrieveKnowledgeContext } = require('../services/knowledge');
+const { transcribeAudio } = require('../services/transcription');
 
 const router = express.Router();
+
+// Multer configured for in-memory storage, 10MB limit for audio files
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('audio/') || file.mimetype === 'video/webm') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only audio files are allowed'), false);
+    }
+  },
+});
 
 function normalizeAllowedDomain(domain) {
   if (!domain || typeof domain !== 'string') return null;
@@ -230,6 +245,151 @@ router.post(
       });
     } catch (err) {
       console.error('Message error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// POST /api/conversations/:id/voice — send audio message, transcribe, get AI reply (public)
+router.post(
+  '/:id/voice',
+  upload.single('audio'),
+  async (req, res) => {
+    // Validate conversation ID
+    const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!idPattern.test(req.params.id)) {
+      return res.status(400).json({ error: 'Invalid conversation ID' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No audio file provided' });
+    }
+
+    try {
+      // 1. Transcribe audio using Groq Whisper
+      const transcribedText = await transcribeAudio(req.file.buffer, req.file.mimetype);
+
+      if (!transcribedText) {
+        return res.status(400).json({ error: 'Could not transcribe audio — no speech detected' });
+      }
+
+      // 2. Get conversation
+      const convResult = await db.query('SELECT * FROM conversations WHERE id = $1', [
+        req.params.id,
+      ]);
+      if (convResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Conversation not found' });
+      }
+
+      const conversation = convResult.rows[0];
+
+      // 3. Get bot config
+      const botResult = await db.query('SELECT * FROM bots WHERE id = $1', [conversation.bot_id]);
+      if (botResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Bot not found' });
+      }
+
+      const bot = botResult.rows[0];
+
+      // 4. Get or create session
+      const session = await getOrCreateSession(conversation.id);
+
+      // 5. Add transcribed user message
+      const messages = conversation.messages || [];
+      messages.push({ role: 'user', content: transcribedText });
+
+      // 6. Update session based on user input
+      const updatedSession = await updateSession(session.id, transcribedText, session.stage, conversation.id);
+
+      // 7. Generate AI reply with session context
+      const sessionData = { name: updatedSession.name, phone: updatedSession.phone };
+      const pageContext = req.body.pageContext ? JSON.parse(req.body.pageContext) : null;
+      const knowledgeContext = await retrieveKnowledgeContext(bot.id, transcribedText);
+      const aiReply = await generateReply(
+        bot.config,
+        messages,
+        updatedSession.stage,
+        sessionData,
+        pageContext,
+        knowledgeContext
+      );
+      messages.push({ role: 'assistant', content: aiReply });
+
+      // 8. Create or update lead if session is complete
+      let leadId = conversation.lead_id;
+      let leadIntent = null;
+      let leadConfidence = null;
+      let conversationSentiment = null;
+
+      if (updatedSession.stage === STAGES.COMPLETE && updatedSession.name && updatedSession.phone) {
+        const [intentResult, sentimentResult] = await Promise.all([
+          classifyIntent(bot.config, messages),
+          analyzeSentiment(bot.config, messages),
+        ]);
+
+        leadIntent = intentResult.intent;
+        leadConfidence = intentResult.confidence;
+        conversationSentiment = sentimentResult;
+
+        if (!leadId) {
+          const leadResult = await db.query(
+            `INSERT INTO leads (bot_id, name, phone, email, source_url, intent, confidence_score)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+            [
+              bot.id,
+              updatedSession.name,
+              updatedSession.phone,
+              updatedSession.email || null,
+              req.body.sourceUrl || null,
+              leadIntent,
+              leadConfidence,
+            ]
+          );
+          leadId = leadResult.rows[0].id;
+        } else {
+          await db.query(
+            'UPDATE leads SET name = $1, phone = $2, email = $3, intent = $4, confidence_score = $5 WHERE id = $6',
+            [updatedSession.name, updatedSession.phone, updatedSession.email || null, leadIntent, leadConfidence, leadId]
+          );
+        }
+      }
+
+      // 9. Update conversation
+      await db.query(
+        'UPDATE conversations SET messages = $1, lead_id = $2, sentiment = $3, updated_at = NOW() WHERE id = $4',
+        [JSON.stringify(messages), leadId, conversationSentiment, conversation.id]
+      );
+
+      // 10. Calculate progress
+      const capturedFields = [];
+      if (updatedSession.name) capturedFields.push('name');
+      if (updatedSession.phone) capturedFields.push('phone');
+
+      const totalRequired = 2;
+      const progress = Math.min(capturedFields.length, totalRequired) / totalRequired;
+
+      res.json({
+        reply: aiReply,
+        transcribedText,
+        session: {
+          stage: updatedSession.stage,
+          name: updatedSession.name,
+          phone: updatedSession.phone,
+        },
+        progress: {
+          percentage: Math.round(progress * 100),
+          captured: capturedFields,
+          stepsLeft: totalRequired - capturedFields.length,
+        },
+        leadCaptured: updatedSession.stage === STAGES.COMPLETE,
+      });
+    } catch (err) {
+      console.error('Voice message error:', err);
+
+      if (err.message && err.message.includes('Transcription failed')) {
+        return res.status(422).json({ error: 'Failed to transcribe audio. Please try again or type your message.' });
+      }
+
       res.status(500).json({ error: 'Internal server error' });
     }
   }
